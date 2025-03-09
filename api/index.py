@@ -15,15 +15,6 @@ STOCKS = ['MSTR', '^IXIC', 'NVDA', 'TSLA']
 # 要追踪的加密货币列表
 CRYPTO = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT', 'XRP/USDT', 'BNB/USDT', 'ADA/USDT', 'XLM/USDT']
 
-# 初始化币安交易所接口
-exchange = ccxt.binance({
-    'enableRateLimit': True,
-    'options': {
-        'defaultType': 'spot',
-        'adjustForTimeDifference': True,
-    }
-})
-
 # 配置请求会话
 session = requests.Session()
 retry_strategy = Retry(
@@ -78,50 +69,81 @@ def get_stock_data(symbol):
     return None
 
 def get_crypto_data():
-    """批量获取所有加密货币数据"""
+    """使用币安公共API获取加密货币数据"""
     all_data = []
     try:
-        tickers = exchange.fetch_tickers(CRYPTO)
-        for symbol in CRYPTO:
-            if symbol in tickers:
-                ticker = tickers[symbol]
-                all_data.append({
-                    'symbol': symbol.split('/')[0],
-                    'price': float(ticker['last']),
-                    'change_percent': float(ticker['percentage']),
-                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    'type': 'crypto'
-                })
+        # 使用币安公共API
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        
+        # 获取24小时价格统计
+        response = session.get('https://api.binance.com/api/v3/ticker/24hr', headers=headers, timeout=10)
+        if response.status_code != 200:
+            print(f"Error fetching crypto data: Status code {response.status_code}")
+            return all_data
+
+        all_tickers = response.json()
+        ticker_dict = {item['symbol']: item for item in all_tickers}
+        
+        for pair in CRYPTO:
+            symbol = pair.replace('/', '')  # 转换 BTC/USDT 为 BTCUSDT
+            if symbol in ticker_dict:
+                ticker = ticker_dict[symbol]
+                try:
+                    price = float(ticker['lastPrice'])
+                    change = float(ticker['priceChangePercent'])
+                    
+                    all_data.append({
+                        'symbol': pair.split('/')[0],
+                        'price': price,
+                        'change_percent': change,
+                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                        'type': 'crypto'
+                    })
+                except (ValueError, KeyError) as e:
+                    print(f"Error processing {symbol} data: {str(e)}")
+                    continue
+            else:
+                print(f"Symbol {symbol} not found in Binance response")
     except Exception as e:
-        print(f"Error fetching crypto data: {str(e)}")
+        print(f"Error in get_crypto_data: {str(e)}")
     return all_data
 
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def catch_all(path):
     """处理所有路由"""
-    if path == '' or path == 'index.html':
-        return render_template('index.html', stocks=STOCKS, crypto=[c.split('/')[0] for c in CRYPTO])
-    elif path == 'api/market-data':
-        all_data = []
-        
-        # 获取股票数据
-        for symbol in STOCKS:
-            stock_data = get_stock_data(symbol)
-            if stock_data:
-                all_data.append(stock_data)
-        
-        # 获取加密货币数据
-        crypto_data = get_crypto_data()
-        if crypto_data:
-            all_data.extend(crypto_data)
-        
+    try:
+        if path == '' or path == 'index.html':
+            return render_template('index.html', stocks=STOCKS, crypto=[c.split('/')[0] for c in CRYPTO])
+        elif path == 'api/market-data':
+            all_data = []
+            
+            # 获取股票数据
+            for symbol in STOCKS:
+                stock_data = get_stock_data(symbol)
+                if stock_data:
+                    all_data.append(stock_data)
+            
+            # 获取加密货币数据
+            crypto_data = get_crypto_data()
+            if crypto_data:
+                all_data.extend(crypto_data)
+            
+            return Response(
+                json.dumps(all_data),
+                mimetype='application/json'
+            )
+        else:
+            return '', 404
+    except Exception as e:
+        print(f"Error in catch_all route: {str(e)}")
         return Response(
-            json.dumps(all_data),
+            json.dumps({"error": str(e)}),
+            status=500,
             mimetype='application/json'
         )
-    else:
-        return '', 404
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8000) 
