@@ -21,7 +21,7 @@ STOCKS = ['MSTR', '^IXIC', 'NVDA', 'TSLA']
 CRYPTO = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT', 'XRP/USDT', 'BNB/USDT', 'ADA/USDT', 'XLM/USDT']
 
 # 币安API基础URL
-BINANCE_API_URL = 'https://api.binance.com'
+BINANCE_API_URL = 'https://api.binance.us'
 
 # 配置请求会话
 def create_session():
@@ -79,7 +79,7 @@ def get_stock_data(symbol, session):
     return None
 
 def get_crypto_data(session):
-    """使用币安公共API获取加密货币数据"""
+    """使用币安美国站点API获取加密货币数据"""
     all_data = []
     try:
         headers = {
@@ -91,7 +91,7 @@ def get_crypto_data(session):
         try:
             url = f'{BINANCE_API_URL}/api/v3/ticker/24hr'
             response = session.get(url, headers=headers, timeout=5)
-            logger.info(f"Binance API response status: {response.status_code}")
+            logger.info(f"Binance.US API response status: {response.status_code}")
             
             if response.status_code == 200:
                 data = response.json()
@@ -116,43 +116,21 @@ def get_crypto_data(session):
                             })
                             logger.info(f"Successfully added {symbol} data: price={price}, change={change}")
                         else:
-                            logger.warning(f"Symbol {symbol} not found in response")
-                            # 尝试使用单个交易对API
-                            single_url = f'{BINANCE_API_URL}/api/v3/ticker/price?symbol={symbol}'
-                            single_response = session.get(single_url, headers=headers, timeout=5)
-                            if single_response.status_code == 200:
-                                price_data = single_response.json()
-                                price = float(price_data['price'])
-                                
-                                # 获取24小时价格变化
-                                change_url = f'{BINANCE_API_URL}/api/v3/ticker/24hr?symbol={symbol}'
-                                change_response = session.get(change_url, headers=headers, timeout=5)
-                                if change_response.status_code == 200:
-                                    change_data = change_response.json()
-                                    change = float(change_data['priceChangePercent'])
-                                    
-                                    all_data.append({
-                                        'symbol': pair.split('/')[0],
-                                        'price': price,
-                                        'change_percent': change,
-                                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                                        'type': 'crypto'
-                                    })
-                                    logger.info(f"Successfully added {symbol} data from single API: price={price}, change={change}")
+                            logger.warning(f"Symbol {symbol} not found in Binance.US response")
                     except Exception as e:
-                        logger.error(f"Error processing {pair}: {str(e)}")
+                        logger.error(f"Error processing {pair} from Binance.US: {str(e)}")
                         continue
             else:
-                logger.error(f"Failed to fetch data from Binance API: {response.text}")
+                logger.error(f"Failed to fetch data from Binance.US API: {response.text}")
                 
         except Exception as e:
-            logger.error(f"Error in Binance API request: {str(e)}")
+            logger.error(f"Error in Binance.US API request: {str(e)}")
             return all_data
                 
     except Exception as e:
         logger.error(f"Error in get_crypto_data: {str(e)}")
     
-    logger.info(f"Returning {len(all_data)} crypto entries")
+    logger.info(f"Returning {len(all_data)} crypto entries from Binance.US")
     return all_data
 
 @app.route('/', defaults={'path': ''})
