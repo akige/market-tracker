@@ -18,7 +18,7 @@ app = Flask(__name__)
 STOCKS = ['MSTR', '^IXIC', 'NVDA', 'TSLA']
 
 # 要追踪的加密货币列表
-CRYPTO = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT', 'XRP/USDT', 'BNB/USDT', 'ADA/USDT', 'XLM/USDT']
+CRYPTO = ['BTC/USD', 'ETH/USD', 'SOL/USD', 'DOGE/USD', 'XRP/USD', 'BNB/USD', 'ADA/USD', 'XLM/USD']
 
 # 配置请求会话
 def create_session():
@@ -76,58 +76,56 @@ def get_stock_data(symbol, session):
     return None
 
 def get_crypto_data(session):
-    """使用币安公共API获取加密货币数据"""
+    """使用币安美国API获取加密货币数据"""
     all_data = []
     try:
-        # 使用币安公共API
+        # 使用币安美国API
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
 
         # 获取所有交易对的最新价格
         try:
-            prices_url = 'https://api.binance.com/api/v3/ticker/price'
-            prices_response = session.get(prices_url, headers=headers, timeout=5)
-            logger.info(f"Binance prices API response status: {prices_response.status_code}")
+            # 使用 CoinGecko API 替代
+            coins = ['bitcoin', 'ethereum', 'solana', 'dogecoin', 'ripple', 'binancecoin', 'cardano', 'stellar']
+            coins_str = ','.join(coins)
             
-            if prices_response.status_code != 200:
-                logger.error(f"Failed to fetch prices: {prices_response.text}")
+            url = f'https://api.coingecko.com/api/v3/simple/price?ids={coins_str}&vs_currencies=usd&include_24hr_change=true'
+            response = session.get(url, headers=headers, timeout=5)
+            logger.info(f"CoinGecko API response status: {response.status_code}")
+            
+            if response.status_code != 200:
+                logger.error(f"Failed to fetch crypto data: {response.text}")
                 return all_data
             
-            prices_data = prices_response.json()
-            price_dict = {item['symbol']: float(item['price']) for item in prices_data}
+            data = response.json()
             
-            # 获取24小时统计数据
-            stats_url = 'https://api.binance.com/api/v3/ticker/24hr'
-            stats_response = session.get(stats_url, headers=headers, timeout=5)
-            logger.info(f"Binance 24hr stats API response status: {stats_response.status_code}")
+            # 映射币名到符号
+            coin_to_symbol = {
+                'bitcoin': 'BTC',
+                'ethereum': 'ETH',
+                'solana': 'SOL',
+                'dogecoin': 'DOGE',
+                'ripple': 'XRP',
+                'binancecoin': 'BNB',
+                'cardano': 'ADA',
+                'stellar': 'XLM'
+            }
             
-            if stats_response.status_code != 200:
-                logger.error(f"Failed to fetch 24hr stats: {stats_response.text}")
-                return all_data
-            
-            stats_data = stats_response.json()
-            stats_dict = {item['symbol']: float(item['priceChangePercent']) for item in stats_data}
-            
-            # 处理每个交易对
-            for pair in CRYPTO:
-                symbol = pair.replace('/', '')  # 转换 BTC/USDT 为 BTCUSDT
-                logger.info(f"Processing {symbol}")
-                
-                if symbol in price_dict and symbol in stats_dict:
-                    price = price_dict[symbol]
-                    change = stats_dict[symbol]
+            for coin_id, coin_data in data.items():
+                if coin_id in coin_to_symbol:
+                    symbol = coin_to_symbol[coin_id]
+                    price = coin_data['usd']
+                    change = coin_data.get('usd_24h_change', 0)
                     
                     all_data.append({
-                        'symbol': pair.split('/')[0],
+                        'symbol': symbol,
                         'price': price,
                         'change_percent': change,
                         'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                         'type': 'crypto'
                     })
                     logger.info(f"Successfully added {symbol} data: price={price}, change={change}")
-                else:
-                    logger.warning(f"Symbol {symbol} not found in response data")
             
         except Exception as e:
             logger.error(f"Error in API requests: {str(e)}")
