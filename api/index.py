@@ -7,7 +7,6 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import time
 import logging
-import ccxt
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -21,20 +20,8 @@ STOCKS = ['MSTR', '^IXIC', 'NVDA', 'TSLA']
 # 要追踪的加密货币列表
 CRYPTO = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT', 'XRP/USDT', 'BNB/USDT', 'ADA/USDT', 'XLM/USDT']
 
-# 初始化币安美国交易所接口
-def create_exchange():
-    return ccxt.binanceus({
-        'enableRateLimit': True,
-        'options': {
-            'defaultType': 'spot',
-            'adjustForTimeDifference': True,
-            'recvWindow': 60000
-        },
-        'timeout': 30000,
-        'headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-    })
+# 币安API基础URL
+BINANCE_API_URL = 'https://api.binance.com'
 
 # 配置请求会话
 def create_session():
@@ -91,44 +78,77 @@ def get_stock_data(symbol, session):
         logger.error(f"Error fetching stock data for {symbol}: {str(e)}")
     return None
 
-def get_crypto_data(session=None):
-    """使用币安美国API获取加密货币数据"""
+def get_crypto_data(session):
+    """使用币安公共API获取加密货币数据"""
     all_data = []
     try:
-        # 创建交易所实例
-        exchange = create_exchange()
-        logger.info("Created exchange instance")
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'application/json',
+        }
 
+        # 获取24小时价格统计
         try:
-            # 获取所有交易对的ticker数据
-            tickers = exchange.fetch_tickers(CRYPTO)
-            logger.info(f"Fetched {len(tickers)} tickers")
-
-            for symbol in CRYPTO:
-                try:
-                    if symbol in tickers:
-                        ticker = tickers[symbol]
-                        price = float(ticker['last'])
-                        change = float(ticker['percentage'])
-                        
-                        all_data.append({
-                            'symbol': symbol.split('/')[0],
-                            'price': price,
-                            'change_percent': change,
-                            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                            'type': 'crypto'
-                        })
-                        logger.info(f"Successfully added {symbol} data: price={price}, change={change}")
-                    else:
-                        logger.warning(f"Symbol {symbol} not found in tickers")
-                except Exception as e:
-                    logger.error(f"Error processing {symbol}: {str(e)}")
-                    continue
-
+            url = f'{BINANCE_API_URL}/api/v3/ticker/24hr'
+            response = session.get(url, headers=headers, timeout=5)
+            logger.info(f"Binance API response status: {response.status_code}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                # 创建一个字典来存储所有交易对的数据
+                ticker_data = {item['symbol']: item for item in data}
+                
+                for pair in CRYPTO:
+                    try:
+                        # 将 BTC/USDT 格式转换为 BTCUSDT
+                        symbol = pair.replace('/', '')
+                        if symbol in ticker_data:
+                            ticker = ticker_data[symbol]
+                            price = float(ticker['lastPrice'])
+                            change = float(ticker['priceChangePercent'])
+                            
+                            all_data.append({
+                                'symbol': pair.split('/')[0],
+                                'price': price,
+                                'change_percent': change,
+                                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                'type': 'crypto'
+                            })
+                            logger.info(f"Successfully added {symbol} data: price={price}, change={change}")
+                        else:
+                            logger.warning(f"Symbol {symbol} not found in response")
+                            # 尝试使用单个交易对API
+                            single_url = f'{BINANCE_API_URL}/api/v3/ticker/price?symbol={symbol}'
+                            single_response = session.get(single_url, headers=headers, timeout=5)
+                            if single_response.status_code == 200:
+                                price_data = single_response.json()
+                                price = float(price_data['price'])
+                                
+                                # 获取24小时价格变化
+                                change_url = f'{BINANCE_API_URL}/api/v3/ticker/24hr?symbol={symbol}'
+                                change_response = session.get(change_url, headers=headers, timeout=5)
+                                if change_response.status_code == 200:
+                                    change_data = change_response.json()
+                                    change = float(change_data['priceChangePercent'])
+                                    
+                                    all_data.append({
+                                        'symbol': pair.split('/')[0],
+                                        'price': price,
+                                        'change_percent': change,
+                                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                        'type': 'crypto'
+                                    })
+                                    logger.info(f"Successfully added {symbol} data from single API: price={price}, change={change}")
+                    except Exception as e:
+                        logger.error(f"Error processing {pair}: {str(e)}")
+                        continue
+            else:
+                logger.error(f"Failed to fetch data from Binance API: {response.text}")
+                
         except Exception as e:
-            logger.error(f"Error fetching tickers: {str(e)}")
+            logger.error(f"Error in Binance API request: {str(e)}")
             return all_data
-
+                
     except Exception as e:
         logger.error(f"Error in get_crypto_data: {str(e)}")
     
@@ -154,7 +174,7 @@ def catch_all(path):
                 time.sleep(0.1)  # 添加小延迟以避免触发频率限制
             
             # 获取加密货币数据
-            crypto_data = get_crypto_data()
+            crypto_data = get_crypto_data(session)
             if crypto_data:
                 all_data.extend(crypto_data)
             
