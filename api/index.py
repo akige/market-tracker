@@ -3,9 +3,9 @@ import os
 from datetime import datetime
 import json
 import requests
-import ccxt
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+import time
 
 app = Flask(__name__)
 
@@ -16,17 +16,19 @@ STOCKS = ['MSTR', '^IXIC', 'NVDA', 'TSLA']
 CRYPTO = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT', 'XRP/USDT', 'BNB/USDT', 'ADA/USDT', 'XLM/USDT']
 
 # 配置请求会话
-session = requests.Session()
-retry_strategy = Retry(
-    total=3,
-    backoff_factor=1,
-    status_forcelist=[429, 500, 502, 503, 504],
-)
-adapter = HTTPAdapter(max_retries=retry_strategy)
-session.mount("https://", adapter)
-session.mount("http://", adapter)
+def create_session():
+    session = requests.Session()
+    retry_strategy = Retry(
+        total=2,
+        backoff_factor=0.5,
+        status_forcelist=[429, 500, 502, 503, 504],
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
 
-def get_stock_data(symbol):
+def get_stock_data(symbol, session):
     """从Yahoo Finance获取股票数据"""
     try:
         headers = {
@@ -34,7 +36,7 @@ def get_stock_data(symbol):
         }
         
         url = f'https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1m&range=1d'
-        response = session.get(url, headers=headers, timeout=10)
+        response = session.get(url, headers=headers, timeout=5)
         data = response.json()
         
         if 'chart' in data and 'result' in data['chart'] and data['chart']['result']:
@@ -68,7 +70,7 @@ def get_stock_data(symbol):
         print(f"Error fetching stock data for {symbol}: {str(e)}")
     return None
 
-def get_crypto_data():
+def get_crypto_data(session):
     """使用币安公共API获取加密货币数据"""
     all_data = []
     try:
@@ -77,35 +79,43 @@ def get_crypto_data():
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
         
-        # 获取24小时价格统计
-        response = session.get('https://api.binance.com/api/v3/ticker/24hr', headers=headers, timeout=10)
-        if response.status_code != 200:
-            print(f"Error fetching crypto data: Status code {response.status_code}")
-            return all_data
-
-        all_tickers = response.json()
-        ticker_dict = {item['symbol']: item for item in all_tickers}
-        
+        # 获取单个交易对的价格，而不是所有交易对
         for pair in CRYPTO:
-            symbol = pair.replace('/', '')  # 转换 BTC/USDT 为 BTCUSDT
-            if symbol in ticker_dict:
-                ticker = ticker_dict[symbol]
-                try:
-                    price = float(ticker['lastPrice'])
-                    change = float(ticker['priceChangePercent'])
-                    
-                    all_data.append({
-                        'symbol': pair.split('/')[0],
-                        'price': price,
-                        'change_percent': change,
-                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                        'type': 'crypto'
-                    })
-                except (ValueError, KeyError) as e:
-                    print(f"Error processing {symbol} data: {str(e)}")
+            try:
+                symbol = pair.replace('/', '')  # 转换 BTC/USDT 为 BTCUSDT
+                
+                # 获取当前价格
+                price_url = f'https://api.binance.com/api/v3/ticker/price?symbol={symbol}'
+                price_response = session.get(price_url, headers=headers, timeout=5)
+                if price_response.status_code != 200:
                     continue
-            else:
-                print(f"Symbol {symbol} not found in Binance response")
+                
+                price_data = price_response.json()
+                price = float(price_data['price'])
+                
+                # 获取24小时价格变化
+                change_url = f'https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}'
+                change_response = session.get(change_url, headers=headers, timeout=5)
+                if change_response.status_code != 200:
+                    continue
+                
+                change_data = change_response.json()
+                change = float(change_data['priceChangePercent'])
+                
+                all_data.append({
+                    'symbol': pair.split('/')[0],
+                    'price': price,
+                    'change_percent': change,
+                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'type': 'crypto'
+                })
+                
+                # 添加小延迟以避免触发频率限制
+                time.sleep(0.1)
+            except Exception as e:
+                print(f"Error processing {pair}: {str(e)}")
+                continue
+                
     except Exception as e:
         print(f"Error in get_crypto_data: {str(e)}")
     return all_data
@@ -118,16 +128,18 @@ def catch_all(path):
         if path == '' or path == 'index.html':
             return render_template('index.html', stocks=STOCKS, crypto=[c.split('/')[0] for c in CRYPTO])
         elif path == 'api/market-data':
+            session = create_session()
             all_data = []
             
             # 获取股票数据
             for symbol in STOCKS:
-                stock_data = get_stock_data(symbol)
+                stock_data = get_stock_data(symbol, session)
                 if stock_data:
                     all_data.append(stock_data)
+                time.sleep(0.1)  # 添加小延迟以避免触发频率限制
             
             # 获取加密货币数据
-            crypto_data = get_crypto_data()
+            crypto_data = get_crypto_data(session)
             if crypto_data:
                 all_data.extend(crypto_data)
             
