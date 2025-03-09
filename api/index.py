@@ -31,7 +31,9 @@ retry_strategy = Retry(
     backoff_factor=1,
     status_forcelist=[429, 500, 502, 503, 504],
 )
-session.mount("https://", HTTPAdapter(max_retries=retry_strategy))
+adapter = HTTPAdapter(max_retries=retry_strategy)
+session.mount("https://", adapter)
+session.mount("http://", adapter)
 
 def get_stock_data(symbol):
     """从Yahoo Finance获取股票数据"""
@@ -94,31 +96,32 @@ def get_crypto_data():
         print(f"Error fetching crypto data: {str(e)}")
     return all_data
 
-@app.route('/')
-def index():
-    """渲染主页"""
-    return render_template('index.html', stocks=STOCKS, crypto=[c.split('/')[0] for c in CRYPTO])
-
-@app.route('/api/market-data')
-def get_market_data():
-    """获取市场数据的API端点"""
-    all_data = []
-    
-    # 获取股票数据
-    for symbol in STOCKS:
-        stock_data = get_stock_data(symbol)
-        if stock_data:
-            all_data.append(stock_data)
-    
-    # 获取加密货币数据
-    crypto_data = get_crypto_data()
-    if crypto_data:
-        all_data.extend(crypto_data)
-    
-    return Response(
-        json.dumps(all_data),
-        mimetype='application/json'
-    )
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def catch_all(path):
+    """处理所有路由"""
+    if path == '' or path == 'index.html':
+        return render_template('index.html', stocks=STOCKS, crypto=[c.split('/')[0] for c in CRYPTO])
+    elif path == 'api/market-data':
+        all_data = []
+        
+        # 获取股票数据
+        for symbol in STOCKS:
+            stock_data = get_stock_data(symbol)
+            if stock_data:
+                all_data.append(stock_data)
+        
+        # 获取加密货币数据
+        crypto_data = get_crypto_data()
+        if crypto_data:
+            all_data.extend(crypto_data)
+        
+        return Response(
+            json.dumps(all_data),
+            mimetype='application/json'
+        )
+    else:
+        return '', 404
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8000) 
