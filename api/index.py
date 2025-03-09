@@ -7,6 +7,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import time
 import logging
+import ccxt
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -18,7 +19,22 @@ app = Flask(__name__)
 STOCKS = ['MSTR', '^IXIC', 'NVDA', 'TSLA']
 
 # 要追踪的加密货币列表
-CRYPTO = ['BTC/USD', 'ETH/USD', 'SOL/USD', 'DOGE/USD', 'XRP/USD', 'BNB/USD', 'ADA/USD', 'XLM/USD']
+CRYPTO = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT', 'XRP/USDT', 'BNB/USDT', 'ADA/USDT', 'XLM/USDT']
+
+# 初始化币安美国交易所接口
+def create_exchange():
+    return ccxt.binanceus({
+        'enableRateLimit': True,
+        'options': {
+            'defaultType': 'spot',
+            'adjustForTimeDifference': True,
+            'recvWindow': 60000
+        },
+        'timeout': 30000,
+        'headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+    })
 
 # 配置请求会话
 def create_session():
@@ -75,62 +91,44 @@ def get_stock_data(symbol, session):
         logger.error(f"Error fetching stock data for {symbol}: {str(e)}")
     return None
 
-def get_crypto_data(session):
+def get_crypto_data(session=None):
     """使用币安美国API获取加密货币数据"""
     all_data = []
     try:
-        # 使用币安美国API
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
+        # 创建交易所实例
+        exchange = create_exchange()
+        logger.info("Created exchange instance")
 
-        # 获取所有交易对的最新价格
         try:
-            # 使用 CoinGecko API 替代
-            coins = ['bitcoin', 'ethereum', 'solana', 'dogecoin', 'ripple', 'binancecoin', 'cardano', 'stellar']
-            coins_str = ','.join(coins)
-            
-            url = f'https://api.coingecko.com/api/v3/simple/price?ids={coins_str}&vs_currencies=usd&include_24hr_change=true'
-            response = session.get(url, headers=headers, timeout=5)
-            logger.info(f"CoinGecko API response status: {response.status_code}")
-            
-            if response.status_code != 200:
-                logger.error(f"Failed to fetch crypto data: {response.text}")
-                return all_data
-            
-            data = response.json()
-            
-            # 映射币名到符号
-            coin_to_symbol = {
-                'bitcoin': 'BTC',
-                'ethereum': 'ETH',
-                'solana': 'SOL',
-                'dogecoin': 'DOGE',
-                'ripple': 'XRP',
-                'binancecoin': 'BNB',
-                'cardano': 'ADA',
-                'stellar': 'XLM'
-            }
-            
-            for coin_id, coin_data in data.items():
-                if coin_id in coin_to_symbol:
-                    symbol = coin_to_symbol[coin_id]
-                    price = coin_data['usd']
-                    change = coin_data.get('usd_24h_change', 0)
-                    
-                    all_data.append({
-                        'symbol': symbol,
-                        'price': price,
-                        'change_percent': change,
-                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                        'type': 'crypto'
-                    })
-                    logger.info(f"Successfully added {symbol} data: price={price}, change={change}")
-            
+            # 获取所有交易对的ticker数据
+            tickers = exchange.fetch_tickers(CRYPTO)
+            logger.info(f"Fetched {len(tickers)} tickers")
+
+            for symbol in CRYPTO:
+                try:
+                    if symbol in tickers:
+                        ticker = tickers[symbol]
+                        price = float(ticker['last'])
+                        change = float(ticker['percentage'])
+                        
+                        all_data.append({
+                            'symbol': symbol.split('/')[0],
+                            'price': price,
+                            'change_percent': change,
+                            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                            'type': 'crypto'
+                        })
+                        logger.info(f"Successfully added {symbol} data: price={price}, change={change}")
+                    else:
+                        logger.warning(f"Symbol {symbol} not found in tickers")
+                except Exception as e:
+                    logger.error(f"Error processing {symbol}: {str(e)}")
+                    continue
+
         except Exception as e:
-            logger.error(f"Error in API requests: {str(e)}")
+            logger.error(f"Error fetching tickers: {str(e)}")
             return all_data
-                
+
     except Exception as e:
         logger.error(f"Error in get_crypto_data: {str(e)}")
     
@@ -156,7 +154,7 @@ def catch_all(path):
                 time.sleep(0.1)  # 添加小延迟以避免触发频率限制
             
             # 获取加密货币数据
-            crypto_data = get_crypto_data(session)
+            crypto_data = get_crypto_data()
             if crypto_data:
                 all_data.extend(crypto_data)
             
