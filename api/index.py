@@ -7,6 +7,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import time
 import logging
+import ccxt
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -20,8 +21,17 @@ STOCKS = ['MSTR', '^IXIC', 'NVDA', 'TSLA']
 # 要追踪的加密货币列表
 CRYPTO = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT', 'XRP/USDT', 'BNB/USDT', 'ADA/USDT', 'XLM/USDT']
 
-# 币安API基础URL
-BINANCE_API_URL = 'https://api.binance.us'
+# 初始化 CCXT 交易所实例
+def init_exchange():
+    try:
+        exchange = ccxt.kucoin({
+            'enableRateLimit': True,
+            'timeout': 10000,
+        })
+        return exchange
+    except Exception as e:
+        logger.error(f"Error initializing exchange: {str(e)}")
+        return None
 
 # 配置请求会话
 def create_session():
@@ -78,59 +88,54 @@ def get_stock_data(symbol, session):
         logger.error(f"Error fetching stock data for {symbol}: {str(e)}")
     return None
 
-def get_crypto_data(session):
-    """使用币安美国站点API获取加密货币数据"""
+def get_crypto_data():
+    """使用CCXT获取加密货币数据"""
     all_data = []
+    exchange = init_exchange()
+    
+    if not exchange:
+        logger.error("Failed to initialize exchange")
+        return all_data
+        
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': 'application/json',
-        }
-
-        # 获取24小时价格统计
+        # 获取所有市场数据
+        markets = {}
         try:
-            url = f'{BINANCE_API_URL}/api/v3/ticker/24hr'
-            response = session.get(url, headers=headers, timeout=5)
-            logger.info(f"Binance.US API response status: {response.status_code}")
-            
-            if response.status_code == 200:
-                data = response.json()
-                # 创建一个字典来存储所有交易对的数据
-                ticker_data = {item['symbol']: item for item in data}
-                
-                for pair in CRYPTO:
-                    try:
-                        # 将 BTC/USDT 格式转换为 BTCUSDT
-                        symbol = pair.replace('/', '')
-                        if symbol in ticker_data:
-                            ticker = ticker_data[symbol]
-                            price = float(ticker['lastPrice'])
-                            change = float(ticker['priceChangePercent'])
-                            
-                            all_data.append({
-                                'symbol': pair.split('/')[0],
-                                'price': price,
-                                'change_percent': change,
-                                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                                'type': 'crypto'
-                            })
-                            logger.info(f"Successfully added {symbol} data: price={price}, change={change}")
-                        else:
-                            logger.warning(f"Symbol {symbol} not found in Binance.US response")
-                    except Exception as e:
-                        logger.error(f"Error processing {pair} from Binance.US: {str(e)}")
-                        continue
-            else:
-                logger.error(f"Failed to fetch data from Binance.US API: {response.text}")
-                
+            markets = exchange.fetch_tickers()
+            logger.info(f"Successfully fetched {len(markets)} markets from exchange")
         except Exception as e:
-            logger.error(f"Error in Binance.US API request: {str(e)}")
+            logger.error(f"Error fetching markets: {str(e)}")
             return all_data
-                
+
+        # 处理每个加密货币
+        for pair in CRYPTO:
+            try:
+                if pair in markets:
+                    ticker = markets[pair]
+                    price = ticker['last']
+                    change = ticker['percentage']
+                    
+                    if price and change is not None:
+                        all_data.append({
+                            'symbol': pair.split('/')[0],
+                            'price': price,
+                            'change_percent': change,
+                            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                            'type': 'crypto'
+                        })
+                        logger.info(f"Successfully added {pair} data: price={price}, change={change}")
+                    else:
+                        logger.warning(f"Invalid price or change data for {pair}")
+                else:
+                    logger.warning(f"Symbol {pair} not found in exchange response")
+            except Exception as e:
+                logger.error(f"Error processing {pair}: {str(e)}")
+                continue
+
     except Exception as e:
         logger.error(f"Error in get_crypto_data: {str(e)}")
     
-    logger.info(f"Returning {len(all_data)} crypto entries from Binance.US")
+    logger.info(f"Returning {len(all_data)} crypto entries")
     return all_data
 
 @app.route('/', defaults={'path': ''})
@@ -141,10 +146,10 @@ def catch_all(path):
         if path == '' or path == 'index.html':
             return render_template('index.html', stocks=STOCKS, crypto=[c.split('/')[0] for c in CRYPTO])
         elif path == 'api/market-data':
-            session = create_session()
             all_data = []
             
             # 获取股票数据
+            session = create_session()
             for symbol in STOCKS:
                 stock_data = get_stock_data(symbol, session)
                 if stock_data:
@@ -152,7 +157,7 @@ def catch_all(path):
                 time.sleep(0.1)  # 添加小延迟以避免触发频率限制
             
             # 获取加密货币数据
-            crypto_data = get_crypto_data(session)
+            crypto_data = get_crypto_data()
             if crypto_data:
                 all_data.extend(crypto_data)
             
