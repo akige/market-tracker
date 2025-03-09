@@ -6,6 +6,11 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import time
+import logging
+
+# 配置日志
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -67,7 +72,7 @@ def get_stock_data(symbol, session):
                 'type': 'stock'
             }
     except Exception as e:
-        print(f"Error fetching stock data for {symbol}: {str(e)}")
+        logger.error(f"Error fetching stock data for {symbol}: {str(e)}")
     return None
 
 def get_crypto_data(session):
@@ -78,46 +83,60 @@ def get_crypto_data(session):
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
-        
-        # 获取单个交易对的价格，而不是所有交易对
-        for pair in CRYPTO:
-            try:
+
+        # 获取所有交易对的最新价格
+        try:
+            prices_url = 'https://api.binance.com/api/v3/ticker/price'
+            prices_response = session.get(prices_url, headers=headers, timeout=5)
+            logger.info(f"Binance prices API response status: {prices_response.status_code}")
+            
+            if prices_response.status_code != 200:
+                logger.error(f"Failed to fetch prices: {prices_response.text}")
+                return all_data
+            
+            prices_data = prices_response.json()
+            price_dict = {item['symbol']: float(item['price']) for item in prices_data}
+            
+            # 获取24小时统计数据
+            stats_url = 'https://api.binance.com/api/v3/ticker/24hr'
+            stats_response = session.get(stats_url, headers=headers, timeout=5)
+            logger.info(f"Binance 24hr stats API response status: {stats_response.status_code}")
+            
+            if stats_response.status_code != 200:
+                logger.error(f"Failed to fetch 24hr stats: {stats_response.text}")
+                return all_data
+            
+            stats_data = stats_response.json()
+            stats_dict = {item['symbol']: float(item['priceChangePercent']) for item in stats_data}
+            
+            # 处理每个交易对
+            for pair in CRYPTO:
                 symbol = pair.replace('/', '')  # 转换 BTC/USDT 为 BTCUSDT
+                logger.info(f"Processing {symbol}")
                 
-                # 获取当前价格
-                price_url = f'https://api.binance.com/api/v3/ticker/price?symbol={symbol}'
-                price_response = session.get(price_url, headers=headers, timeout=5)
-                if price_response.status_code != 200:
-                    continue
-                
-                price_data = price_response.json()
-                price = float(price_data['price'])
-                
-                # 获取24小时价格变化
-                change_url = f'https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}'
-                change_response = session.get(change_url, headers=headers, timeout=5)
-                if change_response.status_code != 200:
-                    continue
-                
-                change_data = change_response.json()
-                change = float(change_data['priceChangePercent'])
-                
-                all_data.append({
-                    'symbol': pair.split('/')[0],
-                    'price': price,
-                    'change_percent': change,
-                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    'type': 'crypto'
-                })
-                
-                # 添加小延迟以避免触发频率限制
-                time.sleep(0.1)
-            except Exception as e:
-                print(f"Error processing {pair}: {str(e)}")
-                continue
+                if symbol in price_dict and symbol in stats_dict:
+                    price = price_dict[symbol]
+                    change = stats_dict[symbol]
+                    
+                    all_data.append({
+                        'symbol': pair.split('/')[0],
+                        'price': price,
+                        'change_percent': change,
+                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                        'type': 'crypto'
+                    })
+                    logger.info(f"Successfully added {symbol} data: price={price}, change={change}")
+                else:
+                    logger.warning(f"Symbol {symbol} not found in response data")
+            
+        except Exception as e:
+            logger.error(f"Error in API requests: {str(e)}")
+            return all_data
                 
     except Exception as e:
-        print(f"Error in get_crypto_data: {str(e)}")
+        logger.error(f"Error in get_crypto_data: {str(e)}")
+    
+    logger.info(f"Returning {len(all_data)} crypto entries")
     return all_data
 
 @app.route('/', defaults={'path': ''})
@@ -143,6 +162,7 @@ def catch_all(path):
             if crypto_data:
                 all_data.extend(crypto_data)
             
+            logger.info(f"Returning total {len(all_data)} entries")
             return Response(
                 json.dumps(all_data),
                 mimetype='application/json'
@@ -150,7 +170,7 @@ def catch_all(path):
         else:
             return '', 404
     except Exception as e:
-        print(f"Error in catch_all route: {str(e)}")
+        logger.error(f"Error in catch_all route: {str(e)}")
         return Response(
             json.dumps({"error": str(e)}),
             status=500,
